@@ -148,10 +148,9 @@ def test_database():
     }
     try:
         if db is not None:
-            response["database"] = "✅ Available"
+            response["database"] = "✅ Connected & Working"
             response["connection_status"] = "Connected"
             response["collections"] = db.list_collection_names()
-            response["database"] = "✅ Connected & Working"
     except Exception as e:
         response["database"] = f"⚠️ Connected but Error: {str(e)[:80]}"
     return response
@@ -253,7 +252,7 @@ async def update_config(update: ConfigUpdate, user=Depends(get_current_user)):
 
 # Conventional Commit logic
 TYPES = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
-BREAKING_HINTS = ["BREAKING", "!:", "BREAKING CHANGE", "major", "incompatible"]
+BREAKING_HINTS = ["breaking", "breaking change", "major", "incompatible"]
 
 
 def infer_type_from_status(git_status: Optional[str], description: Optional[str]) -> str:
@@ -297,7 +296,8 @@ def build_message(commit_type: str, scope: Optional[str], description: Optional[
     # first line
     scope_part = f"({scope})" if scope else ""
     bang = "!" if breaking else ""
-    header = f"{commit_type}{bang}{scope_part}: {desc}"
+    # Spec: type(scope)!: description
+    header = f"{commit_type}{scope_part}{bang}: {desc}"
 
     body_lines: List[str] = []
     if version:
@@ -309,7 +309,13 @@ def build_message(commit_type: str, scope: Optional[str], description: Optional[
     if footer_template:
         footer_lines.append(footer_template)
 
-    message = "\n\n".join([header] + (["\n".join(body_lines)] if body_lines else []) + (["\n".join(footer_lines)] if footer_lines else []))
+    sections = [header]
+    if body_lines:
+        sections.append("\n".join(body_lines))
+    if footer_lines:
+        sections.append("\n".join(footer_lines))
+    message = "\n\n".join(sections)
+
     # simple changelog line
     scope_disp = f"({scope})" if scope else ""
     changelog = f"- {commit_type}{scope_disp}: {desc}"
@@ -337,9 +343,12 @@ async def generate_commit(req: GenerateRequest, user=Depends(get_current_user)):
         favs = cfg.get("favorite_types") or []
         ctype = favs[0] if favs else "chore"
 
-    scope = req.scope or infer_scope(req.git_status)
-    # breaking change detection
-    breaking = any(h.lower() in (req.description or "").lower() for h in ["breaking", "major", "incompatible"]) or any(h in (req.git_status or "") for h in BREAKING_HINTS)
+    scope = (req.scope or infer_scope(req.git_status)) or None
+
+    # breaking change detection (case-insensitive)
+    desc_l = (req.description or "").lower()
+    status_l = (req.git_status or "").lower()
+    breaking = any(h in desc_l for h in BREAKING_HINTS) or any(h in status_l for h in BREAKING_HINTS)
 
     built = build_message(ctype, scope, req.description, req.version, breaking, cfg.get("footer_template"))
 
@@ -401,7 +410,7 @@ async def admin_stats(user=Depends(get_current_user)):
     users = get_collection("user")
     history = get_collection("commithistory")
     total_users = users.count_documents({})
-    total_msgs = history.count_documents( {} )
+    total_msgs = history.count_documents({})
     # Active users in current month
     mk = month_key()
     active = users.count_documents({f"usage.{mk}": {"$gt": 0}})
